@@ -2,24 +2,25 @@
 
 #include <vector>
 
-#include "transform.h"
+#include "transform.hpp"
 
 
 class ColorRangesFC : public ColorRanges
 {
 protected:
-    ColorVal negnumPrevFrames;
+    ColorVal numPrevFrames;
+    ColorVal alpha_min;
     ColorVal alpha_max;
     const ColorRanges *ranges;
 public:
-    ColorRangesFC(const ColorVal amin, const ColorVal amax, const ColorRanges *rangesIn) : negnumPrevFrames(amin), alpha_max(amax), ranges(rangesIn) {}
+    ColorRangesFC(const ColorVal pf, const ColorVal amin, const ColorVal amax, const ColorRanges *rangesIn) : numPrevFrames(pf), alpha_min(amin), alpha_max(amax), ranges(rangesIn) {}
     bool isStatic() const { return false; }
-    int numPlanes() const { return 4; }
-    ColorVal min(int p) const { if (p<3) return ranges->min(p); else return negnumPrevFrames; }
-    ColorVal max(int p) const { if (p<3) return ranges->max(p); else return alpha_max;}
-    void minmax(const int p, const prevPlanes &pp, ColorVal &min, ColorVal &max) const {
-        if (p == 3) { min=negnumPrevFrames; max=alpha_max; }
-        else ranges->minmax(p, pp, min, max);
+    int numPlanes() const { return 5; }
+    ColorVal min(int p) const { if (p<3) return ranges->min(p); else if (p==3) return alpha_min; else return 0; }
+    ColorVal max(int p) const { if (p<3) return ranges->max(p); else if (p==3) return alpha_max; else return numPrevFrames; }
+    void minmax(const int p, const prevPlanes &pp, ColorVal &mi, ColorVal &ma) const {
+        if (p >= 3) { mi=min(p); ma=max(p); }
+        else ranges->minmax(p, pp, mi, ma);
     }
 };
 
@@ -29,22 +30,25 @@ protected:
     bool was_flat;
     int max_lookback;
     int user_max_lookback;
+
+    bool undo_redo_during_decode() { return false; }
     const ColorRanges *meta(Images& images, const ColorRanges *srcRanges) {
+        if (max_lookback >= (int)images.size()) { e_printf("Bad value for FRA lookback\n"); exit(4);}
         was_flat = srcRanges->numPlanes() < 4;
-        if (was_flat)
-          for (unsigned int fr=0; fr<images.size(); fr++) {
+        for (unsigned int fr=0; fr<images.size(); fr++) {
             Image& image = images[fr];
-            image.ensure_alpha();
-          }
-        int lookback = 1-(int)images.size();
-        if (lookback < -max_lookback) lookback=-max_lookback;
-        return new ColorRangesFC(lookback, (srcRanges->numPlanes() == 4 ? srcRanges->max(3) : 1), srcRanges);
+            image.ensure_frame_lookbacks();
+        }
+        int lookback = (int)images.size()-1;
+        if (lookback > max_lookback) lookback=max_lookback;
+        return new ColorRangesFC(lookback, (srcRanges->numPlanes() == 4 ? srcRanges->min(3) : 255), (srcRanges->numPlanes() == 4 ? srcRanges->max(3) : 255), srcRanges);
     }
 
-    void load(const ColorRanges *, RacIn<IO> &rac) {
+    bool load(const ColorRanges *, RacIn<IO> &rac) {
         SimpleSymbolCoder<SimpleBitChance, RacIn<IO>, 24> coder(rac);
         max_lookback = coder.read_int(1, 256);
         v_printf(5,"[%i]",max_lookback);
+        return true;
     }
 
 #ifdef HAS_ENCODER
@@ -52,7 +56,6 @@ protected:
         SimpleSymbolCoder<SimpleBitChance, RacOut<IO>, 24> coder(rac);
         coder.write_int(1,256,max_lookback);
     }
-#endif
 
 // a heuristic to figure out if this is going to help (it won't help if we introduce more entropy than what is eliminated)
     bool process(const ColorRanges *srcRanges, const Images &images) {
@@ -71,10 +74,11 @@ protected:
             for (uint32_t r=0; r<image.rows(); r++) {
                 for (uint32_t c=image.col_begin[r]; c<image.col_end[r]; c++) {
                     new_pixels++;
-                    if (nump>3 && image(3,r,c) == 0) { continue; }
                     for (int prev=1; prev <= fr; prev++) {
                         if (prev>user_max_lookback) break;
                         bool identical=true;
+                        if (nump>3 && image(3,r,c) == 0 && images[fr-prev](3,r,c) == 0) identical=true;
+                        else
                         for (int p=0; p<nump; p++) {
                           if(image(p,r,c) != images[fr-prev](p,r,c)) { identical=false; break;}
                         }
@@ -97,48 +101,33 @@ protected:
 
         return (found_pixels[0] * pixel_cost > new_pixels * (2 + max_lookback));
     };
-
-    void configure(int setting) { user_max_lookback=setting; }
     void data(Images &images) const {
         for (int fr=1; fr < (int)images.size(); fr++) {
             uint32_t ipixels=0;
             Image& image = images[fr];
             for (uint32_t r=0; r<image.rows(); r++) {
                 for (uint32_t c=image.col_begin[r]; c<image.col_end[r]; c++) {
-                    if (image(3,r,c) == 0) continue;
                     for (int prev=1; prev <= fr; prev++) {
                         if (prev>max_lookback) break;
                         bool identical=true;
-                        for (int p=0; p<3; p++) {
+                        if (image(3,r,c) == 0 && images[fr-prev](3,r,c) == 0) identical=true;
+                        else
+                        for (int p=0; p<4; p++) {
                           if(image(p,r,c) != images[fr-prev](p,r,c)) { identical=false; break;}
                         }
-                        if (images[fr-prev](3,r,c) < 0) {
-                          if (image(3,r,c) != images[fr-prev+images[fr-prev](3,r,c)](3,r,c)) identical=false;
-                        } else {
-                          if (image(3,r,c) != images[fr-prev](3,r,c)) identical=false;
-                        }
-                        if (identical) {image.set(3,r,c, -prev); ipixels++; break;}
+                        if (identical) {image.set(4,r,c, prev); ipixels++; break;}
                     }
                 }
             }
 //            printf("frame %i: found %u pixels from previous frames\n", fr, ipixels);
         }
     }
+#endif
+
+    void configure(int setting) { user_max_lookback=setting; }
     void invData(Images &images) const {
-        // has to be done on the fly for all channels except A
-        for (int fr=1; fr<(int)images.size(); fr++) {
-            uint32_t ipixels=0;
-            Image& image = images[fr];
-            for (uint32_t r=0; r<image.rows(); r++) {
-                for (uint32_t c=image.col_begin[r]; c<image.col_end[r]; c++) {
-                    if (image(3,r,c) >= 0) continue;
-                    assert(fr+image(3,r,c) >= 0);
-                    image.set(3,r,c, images[fr+image(3,r,c)](3,r,c));
-                    ipixels++;
-                }
-            }
-//            printf("frame %i: found %u pixels from previous frames\n", fr, ipixels);
-        }
+        // most work has to be done on the fly in the decoder, this is just some cleaning up
+        for (Image& image : images) image.drop_frame_lookbacks();
         if (was_flat) for (Image& image : images) image.drop_alpha();
     }
 };

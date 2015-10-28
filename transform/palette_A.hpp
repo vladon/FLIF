@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../image/image.h"
-#include "../image/color_range.h"
-#include "transform.h"
+#include "../image/image.hpp"
+#include "../image/color_range.hpp"
+#include "transform.hpp"
 #include <tuple>
 #include <set>
 
@@ -20,15 +20,15 @@ public:
 
     ColorVal min(int p) const { if (p<3) return 0; else if (p==3) return 1; else return ranges->min(p); }
     ColorVal max(int p) const { switch(p) {
-                                        case 0: return nb_colors-1;
-                                        case 1: return 0;
+                                        case 0: return 0;
+                                        case 1: return nb_colors-1;
                                         case 2: return 0;
                                         case 3: return 1;
                                         default: return ranges->max(p);
                                          };
                               }
     void minmax(const int p, const prevPlanes &pp, ColorVal &minv, ColorVal &maxv) const {
-         if (p==0) { minv=0; maxv=nb_colors-1; return;}
+         if (p==1) { minv=0; maxv=nb_colors-1; return;}
          else if (p<3) { minv=0; maxv=0; return;}
          else if (p==3) { minv=1; maxv=1; return;}
          else ranges->minmax(p,pp,minv,maxv);
@@ -59,6 +59,22 @@ public:
         return new ColorRangesPaletteA(srcRanges, Palette_vector.size());
     }
 
+    void invData(Images& images) const {
+        for (Image& image : images) {
+          for (uint32_t r=0; r<image.rows(); r++) {
+            for (uint32_t c=0; c<image.cols(); c++) {
+                int P=image(1,r,c);
+                image.set(0,r,c, std::get<1>(Palette_vector[P]));
+                image.set(1,r,c, std::get<2>(Palette_vector[P]));
+                image.set(2,r,c, std::get<3>(Palette_vector[P]));
+                image.set(3,r,c, std::get<0>(Palette_vector[P]));
+            }
+          }
+          image.palette=false;
+        }
+    }
+
+#if HAS_ENCODER
     bool process(const ColorRanges *, const Images &images) {
         for (const Image& image : images)
         for (uint32_t r=0; r<image.rows(); r++) {
@@ -82,89 +98,67 @@ public:
                 if (std::get<0>(C) == 0) { std::get<1>(C) = std::get<2>(C) = std::get<3>(C) = 0; }
                 ColorVal P=0;
                 for (Color c : Palette_vector) {if (c==C) break; else P++;}
-                image.set(0,r,c, P);
-                image.set(1,r,c, 0);
+                image.set(0,r,c, 0);
+                image.set(1,r,c, P);
                 image.set(2,r,c, 0);
                 image.set(3,r,c, 1);
             }
           }
         }
     }
-    void invData(Images& images) const {
-        for (Image& image : images) {
-          for (uint32_t r=0; r<image.rows(); r++) {
-            for (uint32_t c=0; c<image.cols(); c++) {
-                int P=image(0,r,c);
-                image.set(0,r,c, std::get<1>(Palette_vector[P]));
-                image.set(1,r,c, std::get<2>(Palette_vector[P]));
-                image.set(2,r,c, std::get<3>(Palette_vector[P]));
-                image.set(3,r,c, std::get<0>(Palette_vector[P]));
-            }
-          }
-          image.palette=false;
-        }
-    }
-
-#if HAS_ENCODER
     void save(const ColorRanges *srcRanges, RacOut<IO> &rac) const {
         SimpleSymbolCoder<FLIFBitChanceMeta, RacOut<IO>, 24> coder(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacOut<IO>, 24> coderY(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacOut<IO>, 24> coderI(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacOut<IO>, 24> coderQ(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacOut<IO>, 24> coderA(rac);
-        Color min(srcRanges->min(3), srcRanges->min(0), srcRanges->min(1), srcRanges->min(2));
-        Color max(srcRanges->max(3), srcRanges->max(0), srcRanges->max(1), srcRanges->max(2));
         coder.write_int(1, MAX_PALETTE_SIZE, Palette_vector.size());
 //        printf("Saving %lu colors: ", Palette_vector.size());
-        Color prev(-1,-1,-1,-1);
-        prevPlanes pp(3);
+        prevPlanes pp(2);
+        ColorVal min, max;
         for (Color c : Palette_vector) {
                 ColorVal A=std::get<0>(c);
-                coderA.write_int(std::get<0>(min), std::get<0>(max), A);
+                coderA.write_int(srcRanges->min(3),srcRanges->max(3), A);
                 if (std::get<0>(c) == 0) continue;
+                srcRanges->minmax(0,pp,min,max);
                 ColorVal Y=std::get<1>(c);
-                coderY.write_int((std::get<0>(prev) == A ? std::get<1>(prev) : std::get<1>(min)), std::get<1>(max), Y);
-                pp[0]=Y; srcRanges->minmax(1,pp,std::get<2>(min), std::get<2>(max));
+                coderY.write_int(min,max,Y);
+                pp[0]=Y; srcRanges->minmax(1,pp,min,max);
                 ColorVal I=std::get<2>(c);
-                coderI.write_int(std::get<2>(min), std::get<2>(max), I);
-                pp[1]=I; srcRanges->minmax(2,pp,std::get<3>(min), std::get<3>(max));
-                coderQ.write_int(std::get<3>(min), std::get<3>(max), std::get<3>(c));
-
-                std::get<0>(min) = std::get<0>(c);
-                prev = c;
+                coderI.write_int(min, max, I);
+                pp[1]=I; srcRanges->minmax(2,pp,min,max);
+                coderQ.write_int(min, max, std::get<3>(c));
 //                printf("YIQ(%i,%i,%i)\t", std::get<0>(c), std::get<1>(c), std::get<2>(c));
         }
 //        printf("\nSaved palette of size: %lu\n",Palette_vector.size());
         v_printf(5,"[%lu]",Palette_vector.size());
     }
 #endif
-    void load(const ColorRanges *srcRanges, RacIn<IO> &rac) {
+    bool load(const ColorRanges *srcRanges, RacIn<IO> &rac) {
         SimpleSymbolCoder<FLIFBitChanceMeta, RacIn<IO>, 24> coder(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacIn<IO>, 24> coderY(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacIn<IO>, 24> coderI(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacIn<IO>, 24> coderQ(rac);
         SimpleSymbolCoder<FLIFBitChanceMeta, RacIn<IO>, 24> coderA(rac);
-        Color min(srcRanges->min(3), srcRanges->min(0), srcRanges->min(1), srcRanges->min(2));
-        Color max(srcRanges->max(3), srcRanges->max(0), srcRanges->max(1), srcRanges->max(2));
         long unsigned size = coder.read_int(1, MAX_PALETTE_SIZE);
 //        printf("Loading %lu colors: ", size);
-        Color prev(-1,-1,-1,-1);
-        prevPlanes pp(3);
+        prevPlanes pp(2);
+        ColorVal min, max;
         for (unsigned int p=0; p<size; p++) {
-                ColorVal A=coderA.read_int(std::get<0>(min), std::get<0>(max));
+                ColorVal A=coderA.read_int(srcRanges->min(3),srcRanges->max(3));
                 if (A == 0) { Palette_vector.push_back(Color(0,0,0,0)); continue; }
-                ColorVal Y=coderY.read_int((std::get<0>(prev) == A ? std::get<1>(prev) : std::get<1>(min)), std::get<1>(max));
-                pp[0]=Y; srcRanges->minmax(1,pp,std::get<2>(min), std::get<2>(max));
-                ColorVal I=coderI.read_int(std::get<2>(min), std::get<2>(max));
-                pp[1]=I; srcRanges->minmax(2,pp,std::get<3>(min), std::get<3>(max));
-                ColorVal Q=coderQ.read_int(std::get<3>(min), std::get<3>(max));
+                srcRanges->minmax(0,pp,min,max);
+                ColorVal Y=coderY.read_int(min,max);
+                pp[0]=Y; srcRanges->minmax(1,pp,min,max);
+                ColorVal I=coderI.read_int(min,max);
+                pp[1]=I; srcRanges->minmax(2,pp,min,max);
+                ColorVal Q=coderQ.read_int(min,max);
                 Color c(A,Y,I,Q);
                 Palette_vector.push_back(c);
-                std::get<0>(min) = std::get<0>(c);
-                prev = c;
 //                printf("YIQ(%i,%i,%i)\t", std::get<0>(c), std::get<1>(c), std::get<2>(c));
         }
 //        printf("\nLoaded palette of size: %lu\n",Palette_vector.size());
         v_printf(5,"[%lu]",Palette_vector.size());
+        return true;
     }
 };

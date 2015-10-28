@@ -2,8 +2,8 @@
 
 #include <vector>
 
-#include "transform.h"
-#include "../maniac/symbol.h"
+#include "transform.hpp"
+#include "../maniac/symbol.hpp"
 
 
 
@@ -14,6 +14,8 @@ protected:
     std::vector<uint32_t> e;
     uint32_t cols;
     uint32_t nb;
+
+    bool undo_redo_during_decode() { return false; }
 
     const ColorRanges *meta(Images& images, const ColorRanges *srcRanges) {
         uint32_t pos=0;
@@ -32,11 +34,17 @@ protected:
 
     void configure(const int setting) { if (nb==0) nb=setting; else cols=setting; } // ok this is dirty
 
-    void load(const ColorRanges *, RacIn<IO> &rac) {
+    bool load(const ColorRanges *, RacIn<IO> &rac) {
         SimpleSymbolCoder<FLIFBitChanceMeta, RacIn<IO>, 24> coder(rac);
         for (unsigned int i=0; i<nb; i+=1) {b.push_back(coder.read_int(0,cols));}
-        for (unsigned int i=0; i<nb; i+=1) {e.push_back(cols-coder.read_int(0,cols-b[i]));}
-//        for (unsigned int i=0; i<nb; i+=1) {e.push_back(coder.read_int(b[i],cols));}
+        for (unsigned int i=0; i<nb; i+=1) {
+            e.push_back(cols-coder.read_int(0,cols-b[i]));
+            if (e[i] > cols || e[i] < b[i] || e[i] <= 0) {
+                e_printf("\nError: FRS transform: invalid end column\n");
+                return false;
+            }
+        }
+        return true;
     }
 
 #if HAS_ENCODER
@@ -46,9 +54,7 @@ protected:
         assert(nb == e.size());
         for (unsigned int i=0; i<nb; i+=1) { coder.write_int(0,cols,b[i]); }
         for (unsigned int i=0; i<nb; i+=1) { coder.write_int(0,cols-b[i],cols-e[i]); }
-//        for (unsigned int i=0; i<nb; i+=1) { coder.write_int(b[i],cols,e[i]); }
     }
-#endif
 
     bool process(const ColorRanges *srcRanges, const Images &images) {
         if (images.size()<2) return false;
@@ -87,4 +93,5 @@ protected:
         */
         return true;
     }
+#endif
 };

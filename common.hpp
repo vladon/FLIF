@@ -4,15 +4,15 @@
 #include <string>
 #include <string.h>
 
-#include "maniac/rac.h"
-#include "maniac/compound.h"
-#include "maniac/util.h"
+#include "maniac/rac.hpp"
+#include "maniac/compound.hpp"
+#include "maniac/util.hpp"
 
-#include "image/color_range.h"
+#include "image/color_range.hpp"
 
 #include "flif_config.h"
 
-#include "io.h"
+#include "io.hpp"
 
 enum class Optional : uint8_t {
   undefined = 0
@@ -30,24 +30,27 @@ extern int64_t pixels_done;
 #define MAX_TRANSFORM 8
 
 extern const std::vector<std::string> transforms;
+extern uint8_t transform_l;
 
 typedef SimpleBitChance                         FLIFBitChancePass1;
 
 // faster:
-//typedef SimpleBitChance                         FLIFBitChancePass2;
-//typedef SimpleBitChance                         FLIFBitChanceParities;
-
+#ifdef FAST_BUT_WORSE_COMPRESSION
+typedef SimpleBitChance                         FLIFBitChancePass2;
+typedef SimpleBitChance                         FLIFBitChanceTree;
+#else
 // better compression:
 typedef MultiscaleBitChance<6,SimpleBitChance>  FLIFBitChancePass2;
-typedef MultiscaleBitChance<6,SimpleBitChance>  FLIFBitChanceParities;
-
 typedef MultiscaleBitChance<6,SimpleBitChance>  FLIFBitChanceTree;
+#endif
 
 extern const int NB_PROPERTIES[];
 extern const int NB_PROPERTIESA[];
 
 extern const int NB_PROPERTIES_scanlines[];
 extern const int NB_PROPERTIES_scanlinesA[];
+
+extern const int PLANE_ORDERING[];
 
 void initPropRanges_scanlines(Ranges &propRanges, const ColorRanges &ranges, int p);
 
@@ -58,6 +61,7 @@ void initPropRanges(Ranges &propRanges, const ColorRanges &ranges, int p);
 // Prediction used for interpolation. Does not have to be the same as the guess used for encoding/decoding.
 inline ColorVal predict(const Image &image, int z, int p, uint32_t r, uint32_t c)
 {
+    if (p==4) return 0;
     if (z%2 == 0) { // filling horizontal lines
       ColorVal top = image(p,z,r-1,c);
       ColorVal bottom = (r+1 < image.rows(z) ? image(p,z,r+1,c) : top); //grey[p]);

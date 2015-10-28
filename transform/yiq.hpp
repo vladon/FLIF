@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../image/image.h"
-#include "../image/color_range.h"
-#include "transform.h"
+#include "../image/image.hpp"
+#include "../image/color_range.hpp"
+#include "transform.hpp"
 #include <algorithm>
 
 #define clip(x,l,u)   if (x < l) x=l; if (x > u) x=u
@@ -125,6 +125,7 @@ public:
         return new ColorRangesYIQ(par, srcRanges);
     }
 
+#ifdef HAS_ENCODER
     void data(Images& images) const {
 //        printf("TransformYIQ::data: par=%i\n", par);
         for (Image& image : images)
@@ -142,7 +143,7 @@ public:
             }
         }
     }
-
+#endif
     void invData(Images& images) const {
         for (Image& image : images)
         for (uint32_t r=0; r<image.rows(); r++) {
